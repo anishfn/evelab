@@ -1864,8 +1864,11 @@
     gap: 2px;
     height: 40px;
     padding: 0 6px;
+    max-width: calc(100% - var(--float-gap) * 2);
+    overflow-x: auto;
     transform: translateX(-50%);
     animation: notice-in 180ms var(--ease-out) backwards;
+    scrollbar-width: none;
   }
 
   .annotation-tool {
@@ -1910,6 +1913,34 @@
     background: color-mix(in srgb, var(--focus) 16%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--focus) 60%, transparent);
     color: var(--foreground);
+  }
+
+  .annotation-tool:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .annotation-tool[data-danger]:hover {
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+      color: var(--danger);
+    }
+  }
+
+  /* A point for the right-click menu to open from. */
+  .canvas-menu-anchor {
+    position: absolute;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+
+  .selection-count {
+    padding: 0 8px 0 4px;
+    color: var(--foreground-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .annotation-separator {

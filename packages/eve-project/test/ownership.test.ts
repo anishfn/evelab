@@ -4,6 +4,7 @@ import {
   generateProject,
   OwnershipError,
   parseProject,
+  removeEntities,
   removeEntity,
   type ProjectFile,
 } from "../src/index";
@@ -101,6 +102,16 @@ describe("ownership", () => {
     const paths = generateProject(removeEntity(project, "subagent:researcher")).map((file) => file.path);
     expect(paths.some((path) => path.startsWith("agent/subagents/researcher/"))).toBe(false);
     expect(() => removeEntity(project, "tool:ghost")).toThrow(OwnershipError);
+  });
+
+  it("removes a selection in one pass, skipping what a removed subagent already takes", () => {
+    const { files, project } = load();
+    const next = removeEntities(project, ["tool:researcher/browse", "subagent:researcher", "connection:linear", "connection:linear"]);
+    const paths = generateProject(next).map((file) => file.path);
+    expect(paths.some((path) => path.startsWith("agent/subagents/researcher/"))).toBe(false);
+    expect(paths).not.toContain("agent/connections/linear.ts");
+    expect(diff(files, generateProject(next)).added).toEqual([]);
+    expect(() => removeEntities(project, ["tool:ghost"])).toThrow(OwnershipError);
   });
 
   it("rejects owners and capabilities that do not exist", () => {
