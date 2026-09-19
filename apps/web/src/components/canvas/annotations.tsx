@@ -2,7 +2,7 @@
 
 import "@fontsource/caveat/500.css";
 import "@fontsource/caveat/700.css";
-import { createContext, memo, useContext, useEffect, useRef, type CSSProperties } from "react";
+import { createContext, memo, useContext, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
 import { ANNOTATION_COLORS, type Annotation } from "@/components/canvas/layout";
 
@@ -205,78 +205,87 @@ export const SectionCard = memo(SectionCardBase);
 const FONT_LABELS: Record<Annotation["font"], string> = { hand: "Handwritten", sans: "Sans", mono: "Mono", serif: "Serif" };
 
 /** Style for the selected notes and sections, applied to all of them at once. */
+/** Styles the selected notes, followed by whatever acts on the whole selection. With no notes selected, only that. */
 export function AnnotationToolbar({
   selection,
   onChange,
+  children,
 }: {
   selection: Annotation[];
   onChange: (patch: Partial<Annotation>) => void;
+  children?: ReactNode;
 }) {
   const every = <K extends keyof Annotation>(key: K, value: Annotation[K]) => selection.every((entry) => entry[key] === value);
 
   return (
-    <div className="canvas-float annotation-toolbar" role="toolbar" aria-label="Annotation style">
-      {(["s", "m", "l"] as const).map((size) => (
-        <button
-          key={size}
-          type="button"
-          className="annotation-tool"
-          aria-pressed={every("size", size)}
-          aria-label={`Size ${size.toUpperCase()}`}
-          onClick={() => onChange({ size })}
-        >
-          {size.toUpperCase()}
-        </button>
-      ))}
-      <span className="annotation-separator" aria-hidden="true" />
-      {(
-        [
-          ["bold", "B", "Bold"],
-          ["italic", "I", "Italic"],
-          ["underline", "U", "Underline"],
-        ] as const
-      ).map(([key, glyph, label]) => (
-        <button
-          key={key}
-          type="button"
-          className="annotation-tool"
-          data-glyph={key}
-          aria-pressed={every(key, true)}
-          aria-label={label}
-          onClick={() => onChange({ [key]: !every(key, true) })}
-        >
-          {glyph}
-        </button>
-      ))}
-      <span className="annotation-separator" aria-hidden="true" />
-      {(Object.keys(FONT_FAMILIES) as Annotation["font"][]).map((font) => (
-        <button
-          key={font}
-          type="button"
-          className="annotation-tool"
-          aria-pressed={every("font", font)}
-          aria-label={`${FONT_LABELS[font]} font`}
-          title={FONT_LABELS[font]}
-          style={{ fontFamily: FONT_FAMILIES[font], fontSize: font === "hand" ? 17 : 13 }}
-          onClick={() => onChange({ font })}
-        >
-          Aa
-        </button>
-      ))}
-      <span className="annotation-separator" aria-hidden="true" />
-      {ANNOTATION_COLORS.map((color) => (
-        <button
-          key={color}
-          type="button"
-          className="annotation-swatch"
-          data-color={color}
-          aria-pressed={every("color", color)}
-          aria-label={color === "default" ? "Default colour" : `${color} colour`}
-          title={color === "default" ? "Default" : color}
-          style={{ "--swatch": COLOR_VALUES[color] } as CSSProperties}
-          onClick={() => onChange({ color })}
-        />
-      ))}
+    <div className="canvas-float annotation-toolbar" role="toolbar" aria-label={selection.length > 0 ? "Annotation style" : "Selection"}>
+      {selection.length > 0 && (
+        <>
+          {(["s", "m", "l"] as const).map((size) => (
+            <button
+              key={size}
+              type="button"
+              className="annotation-tool"
+              aria-pressed={every("size", size)}
+              aria-label={`Size ${size.toUpperCase()}`}
+              onClick={() => onChange({ size })}
+            >
+              {size.toUpperCase()}
+            </button>
+          ))}
+          <span className="annotation-separator" aria-hidden="true" />
+          {(
+            [
+              ["bold", "B", "Bold"],
+              ["italic", "I", "Italic"],
+              ["underline", "U", "Underline"],
+            ] as const
+          ).map(([key, glyph, label]) => (
+            <button
+              key={key}
+              type="button"
+              className="annotation-tool"
+              data-glyph={key}
+              aria-pressed={every(key, true)}
+              aria-label={label}
+              onClick={() => onChange({ [key]: !every(key, true) })}
+            >
+              {glyph}
+            </button>
+          ))}
+          <span className="annotation-separator" aria-hidden="true" />
+          {(Object.keys(FONT_FAMILIES) as Annotation["font"][]).map((font) => (
+            <button
+              key={font}
+              type="button"
+              className="annotation-tool"
+              aria-pressed={every("font", font)}
+              aria-label={`${FONT_LABELS[font]} font`}
+              title={FONT_LABELS[font]}
+              style={{ fontFamily: FONT_FAMILIES[font], fontSize: font === "hand" ? 17 : 13 }}
+              onClick={() => onChange({ font })}
+            >
+              Aa
+            </button>
+          ))}
+          <span className="annotation-separator" aria-hidden="true" />
+          {ANNOTATION_COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              className="annotation-swatch"
+              data-color={color}
+              aria-pressed={every("color", color)}
+              aria-label={color === "default" ? "Default colour" : `${color} colour`}
+              title={color === "default" ? "Default" : color}
+              style={{ "--swatch": COLOR_VALUES[color] } as CSSProperties}
+              onClick={() => onChange({ color })}
+            />
+          ))}
+        </>
+      )}
+      {selection.length > 0 && children && <span className="annotation-separator" aria-hidden="true" />}
+      {children}
     </div>
   );
 }

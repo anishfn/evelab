@@ -25,6 +25,8 @@ import {
 } from "@xyflow/react";
 import type { CanvasEdge, CanvasGraph, CanvasNode, CanvasNodeKind } from "@evelab/eve-project";
 import {
+  IconAlignmentLeft,
+  IconFocus,
   IconFullscreen,
   IconHelp,
   IconMinus,
@@ -32,6 +34,7 @@ import {
   IconRedo,
   IconSettingsSliders,
   IconSidebarLeft,
+  IconTrash,
   IconUndo,
   IconWireCurved,
   IconWireElbow,
@@ -1256,9 +1259,14 @@ function CanvasInner(props: CanvasProps) {
     if (ok) say({ text: deletion.nodes.length === 1 ? `Deleted ${first!.name}` : `Deleted ${deletion.nodes.length} items` });
   }, [clearSelection, confirmDelete, detach, projectId, removeSelectedAnnotations, run, say]);
 
+  const { hidden, counts } = useMemo(() => foldedNodes(graph, collapsed), [collapsed, graph]);
   const selectedNodes = nodes.filter((node) => node.selected);
   const selectedEdges = edges.filter((edge) => edge.selected);
   const selectedAnnotations = annotations.filter((node) => node.selected);
+  const selectedCards = selectedNodes.filter((node) => !hidden.has(node.id));
+  const arrangeable = selectedCards.length + selectedAnnotations.length;
+  const selectionCount = arrangeable + selectedEdges.length;
+  const showSelectionBar = selectedAnnotations.length > 0 || selectionCount >= 2;
   const selected = selectedNodes.length === 1 ? byId.get(selectedNodes[0]!.id) : undefined;
   const addTarget = selected && isAgentKind(selected.kind) ? selected : byId.get("agent");
 
@@ -1400,7 +1408,6 @@ function CanvasInner(props: CanvasProps) {
     undo,
   ]);
 
-  const { hidden, counts } = useMemo(() => foldedNodes(graph, collapsed), [collapsed, graph]);
 
   const displayNodes = useMemo(
     () =>
@@ -1941,8 +1948,53 @@ function CanvasInner(props: CanvasProps) {
             </div>
           </div>
 
-          {selectedAnnotations.length > 0 && (
-            <AnnotationToolbar selection={selectedAnnotations.map((node) => node.data)} onChange={styleSelected} />
+          {showSelectionBar && (
+            <AnnotationToolbar selection={selectedAnnotations.map((node) => node.data)} onChange={styleSelected}>
+              {selectionCount >= 2 && (
+                <>
+                  <span className="selection-count" aria-live="polite">
+                    {selectionCount} selected
+                  </span>
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <button type="button" className="annotation-tool" aria-label="Arrange" disabled={arrangeable < 2}>
+                            <Icon icon={IconAlignmentLeft} size={16} />
+                          </button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" sideOffset={8}>
+                        Arrange
+                      </TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuContent align="center" side="top" sideOffset={10} className="w-52">
+                      <ArrangeItems count={arrangeable} onArrange={arrange} />
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button type="button" className="annotation-tool" aria-label="Focus selection" onClick={focusSelection}>
+                        <Icon icon={IconFocus} size={16} />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" sideOffset={8}>
+                      Focus (F)
+                    </TooltipContent>
+                  </Tooltip>
+                </>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button type="button" className="annotation-tool" data-danger aria-label="Delete selection" onClick={deleteSelection}>
+                    <Icon icon={IconTrash} size={16} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={8}>
+                  Delete (Del)
+                </TooltipContent>
+              </Tooltip>
+            </AnnotationToolbar>
           )}
 
           {empty && !draft && !notice && annotations.length === 0 && (
@@ -1950,7 +2002,7 @@ function CanvasInner(props: CanvasProps) {
           )}
 
           {notice && (
-            <div className="canvas-float canvas-notice" role="status" data-tone={notice.tone} data-raised={selectedAnnotations.length > 0 || undefined}>
+            <div className="canvas-float canvas-notice" role="status" data-tone={notice.tone} data-raised={showSelectionBar || undefined}>
               <span>{notice.text}</span>
               {notice.undo && (
                 <button type="button" className="canvas-notice-action" onClick={undo}>
