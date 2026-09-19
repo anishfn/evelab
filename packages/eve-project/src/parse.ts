@@ -584,13 +584,17 @@ function readSchedules(context: Context, base: string): Schedule[] {
       const { data, body } = parseFrontmatter(source);
       schedules.push({ id, file, format: "markdown", cron: typeof data.cron === "string" ? data.cron : "", prompt: body.trim(), handler: false, source });
     } else {
+      const config = readAgentSource(source);
+      const markdown = config?.properties.get("markdown")?.text;
+      const prompt = markdown === undefined ? undefined : readStringValue(markdown);
       schedules.push({
         id,
         file,
         format: "module",
         cron: readStringProperty(source, "cron") ?? "",
-        prompt: readStringProperty(source, "markdown") ?? "",
-        handler: readAgentSource(source)?.properties.has("run") ?? false,
+        prompt: prompt ?? "",
+        promptExpression: markdown !== undefined && prompt === undefined ? markdown : undefined,
+        handler: config?.properties.has("run") ?? false,
         source,
       });
     }

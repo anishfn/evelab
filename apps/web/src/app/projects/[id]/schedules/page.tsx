@@ -82,7 +82,11 @@ export default async function SchedulesPage({ params }: { params: Promise<{ id: 
                   </CardHeader>
                   <CardContent>
                     <p className="list-item-detail line-clamp-2">
-                      {schedule.handler ? "Runs a handler written in code." : schedule.prompt || "No prompt"}
+                      {schedule.handler
+                        ? "Runs a handler written in code."
+                        : schedule.promptExpression
+                          ? "Runs a prompt composed in code."
+                          : schedule.prompt || "No prompt"}
                     </p>
                   </CardContent>
                 </Card>

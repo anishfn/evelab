@@ -146,8 +146,10 @@ export const scheduleSchema = z.object({
   file: z.string(),
   format: z.enum(["markdown", "module"]),
   cron: z.string().default(""),
-  /** The prompt of a markdown schedule or a `markdown:` module. Empty for a handler. */
+  /** The prompt of a markdown schedule or a `markdown:` module. Empty for a handler, or when the module composes it. */
   prompt: z.string().default(""),
+  /** Verbatim source of `markdown` when it is not a string literal, such as a joined array. Read-only in the GUI. */
+  promptExpression: z.string().optional(),
   /** A module schedule with a `run` handler instead of a prompt. */
   handler: z.boolean().default(false),
   source: z.string(),

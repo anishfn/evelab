@@ -202,3 +202,36 @@ describe("eve template layouts", () => {
     for (const file of sre) expect(out.get(file.path)).toBe(file.content);
   });
 });
+
+describe("schedules", () => {
+  const base = [
+    { path: "package.json", content: `{"name":"a","type":"module"}\n` },
+    { path: "agent/instructions.md", content: "# A\n" },
+  ];
+  const schedule = (body: string) => [
+    ...base,
+    { path: "agent/schedules/digest.ts", content: `import { defineSchedule } from "eve/schedules";\n\nexport default defineSchedule({\n  cron: "0 9 * * 1",\n${body}});\n` },
+  ];
+
+  it("keeps a composed markdown prompt as an expression", () => {
+    const { project } = parseProject(schedule(`  markdown: ["one", "two"].join("\\n\\n"),\n`));
+    const [entry] = project.schedules;
+    expect(entry?.prompt).toBe("");
+    expect(entry?.promptExpression).toBe(`["one", "two"].join("\\n\\n")`);
+    expect(validateProject(project).some((issue) => issue.at === "schedules.digest.prompt")).toBe(false);
+  });
+
+  it("reads a literal markdown prompt as text", () => {
+    const { project } = parseProject(schedule(`  markdown: "Send the digest.",\n`));
+    const [entry] = project.schedules;
+    expect(entry?.prompt).toBe("Send the digest.");
+    expect(entry?.promptExpression).toBeUndefined();
+  });
+
+  it("still warns when a module has neither a prompt nor a handler", () => {
+    const { project } = parseProject(schedule(""));
+    expect(validateProject(project)).toContainEqual(
+      expect.objectContaining({ level: "warning", at: "schedules.digest.prompt" }),
+    );
+  });
+});

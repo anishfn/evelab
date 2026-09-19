@@ -50,7 +50,7 @@ export function validateProject(project: EveProject): ValidationIssue[] {
     if (schedule.cron.trim().split(/\s+/).length !== 5) {
       issues.push({ level: "error", at: `${at}.cron`, message: "A schedule needs a five-field cron expression." });
     }
-    if (!schedule.handler && schedule.prompt.trim().length === 0) {
+    if (!schedule.handler && !schedule.promptExpression && schedule.prompt.trim().length === 0) {
       issues.push({ level: "warning", at: `${at}.prompt`, message: "This schedule has no prompt to run." });
     }
   }
