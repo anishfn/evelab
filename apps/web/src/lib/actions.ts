@@ -12,6 +12,7 @@ import {
   detachResource,
   OwnershipError,
   reasoningSchema,
+  removeEntities,
   removeEntity,
   addPackageDependencies,
   CHAT_SDK_ADAPTERS,
@@ -382,6 +383,22 @@ export async function removeNodeAction(input: {
   const ref = entityRefSchema.parse(input.ref);
   try {
     await save(projectId, removeEntity(await readProject(projectId), ref));
+  } catch (error) {
+    if (error instanceof OwnershipError) return { ok: false, message: error.message };
+    throw error;
+  }
+  return { ok: true };
+}
+
+/** Deletes a whole canvas selection in one write, so it lands or fails together. */
+export async function removeNodesAction(input: {
+  projectId: string;
+  refs: string[];
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const projectId = await projectFrom(input.projectId);
+  const refs = z.array(entityRefSchema).min(1).max(500).parse(input.refs);
+  try {
+    await save(projectId, removeEntities(await readProject(projectId), refs));
   } catch (error) {
     if (error instanceof OwnershipError) return { ok: false, message: error.message };
     throw error;

@@ -328,6 +328,23 @@ function removeShared(owner: CapabilityOwner, kind: CapabilityKind, name: string
  * given its canvas id. Removing a shared definition removes every re-export of
  * it too. Generation then drops exactly those files.
  */
+/**
+ * Removes several entities in one pass, as a canvas selection does. Anything
+ * inside a subagent that is also going is skipped, since removing the subagent
+ * already takes it.
+ */
+export function removeEntities(project: EveProject, refs: readonly string[]): EveProject {
+  const subagents = refs.filter((ref) => ref.startsWith("subagent:")).map((ref) => ref.slice("subagent:".length));
+  const inside = (key: string) => subagents.some((parent) => key.startsWith(`${parent}/`));
+  const kept = [...new Set(refs)].filter((ref) => {
+    if (ref.startsWith("subagent:")) return !inside(ref.slice("subagent:".length));
+    const capability = parseCapabilityRef(ref);
+    if (!capability || capability.shared) return true;
+    return !subagents.includes(capability.ownerKey) && !inside(capability.ownerKey);
+  });
+  return kept.reduce(removeEntity, project);
+}
+
 export function removeEntity(project: EveProject, ref: string): EveProject {
   const next = structuredClone(project);
   if (ref.startsWith("channel:")) {
