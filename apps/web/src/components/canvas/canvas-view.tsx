@@ -428,6 +428,11 @@ function deletionCopy(nodes: CanvasNode[]): { title: string; description: string
   };
 }
 
+/** A key pressed inside a menu or dialog, such as Escape closing it, is that layer's, not the board's. */
+function insideLayer(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('[role="menu"], [role="dialog"], [role="alertdialog"]'));
+}
+
 function typingInto(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true'], .monaco-editor"));
 }
@@ -1302,6 +1307,18 @@ function CanvasInner(props: CanvasProps) {
     });
   }, [fitView, getNodes]);
 
+  /** An arrow key moves the selection. True when it was one, so the caller stops there. */
+  const nudgeKey = useCallback(
+    (event: { key: string; shiftKey: boolean; preventDefault: () => void }) => {
+      const arrow = ARROWS[event.key];
+      if (!arrow) return false;
+      const step = snap ? 24 : event.shiftKey ? 20 : 4;
+      if (nudge(arrow[0] * step, arrow[1] * step)) event.preventDefault();
+      return true;
+    },
+    [nudge, snap],
+  );
+
   /* ---------- Right-click menu ---------- */
 
   const openMenu = useCallback((event: { clientX: number; clientY: number; preventDefault: () => void }, target: ContextTarget) => {
@@ -1352,7 +1369,7 @@ function CanvasInner(props: CanvasProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (typingInto(event.target) || dialogIsOpen()) return;
+      if (typingInto(event.target) || insideLayer(event.target) || dialogIsOpen()) return;
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
 
@@ -1389,12 +1406,7 @@ function CanvasInner(props: CanvasProps) {
       }
       if (mod || event.altKey) return;
 
-      const arrow = ARROWS[event.key];
-      if (arrow) {
-        const step = snap ? 24 : event.shiftKey ? 20 : 4;
-        if (nudge(arrow[0] * step, arrow[1] * step)) event.preventDefault();
-        return;
-      }
+      if (nudgeKey(event)) return;
 
       switch (event.key) {
         case "Delete":
@@ -1461,13 +1473,12 @@ function CanvasInner(props: CanvasProps) {
     fitView,
     focusSelection,
     getNodes,
-    nudge,
+    nudgeKey,
     openPicker,
     paste,
     redo,
     say,
     setNodes,
-    snap,
     undo,
   ]);
 
@@ -1868,6 +1879,13 @@ function CanvasInner(props: CanvasProps) {
             ref={surfaceRef}
             data-locked={locked || undefined}
             data-tool={tool}
+            // React Flow moves a focused card with the arrows too, but outside undo and saving; the canvas's own nudge takes those keys instead.
+            onKeyDownCapture={(event) => {
+              const mod = event.metaKey || event.ctrlKey || event.altKey;
+              if (mod || !ARROWS[event.key] || typingInto(event.target) || !(event.target as HTMLElement).closest(".react-flow__node")) return;
+              event.stopPropagation();
+              nudgeKey(event);
+            }}
             onDoubleClick={(event) => {
               // Double-click on empty canvas writes a note there, as on a whiteboard.
               if (!(event.target as HTMLElement).classList.contains("react-flow__pane")) return;
