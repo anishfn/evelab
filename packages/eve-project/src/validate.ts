@@ -1,3 +1,4 @@
+import { workspaceMembers } from "./layout";
 import { eveProjectSchema, filePathSchema, type Connection, type EveProject, type Skill, type Subagent, type Tool } from "./types";
 
 export interface ValidationIssue {
@@ -25,8 +26,15 @@ export function validateProject(project: EveProject): ValidationIssue[] {
   const value = parsed.data;
   const base = value.root ? `${value.root}/` : "";
 
+  const members = workspaceMembers(value.files.map((file) => file.path));
   const hasInstructionsFile = value.files.some((file) => file.path === `${base}instructions.md`);
-  if (!hasInstructionsFile && value.agent.instructionSources.length === 0) {
+  if (members.length > 0) {
+    issues.push({
+      level: "error",
+      at: "agent",
+      message: `This is an eve agent workspace holding ${members.join(", ")}. evelab edits one root agent, so open each member as its own project.`,
+    });
+  } else if (!hasInstructionsFile && value.agent.instructionSources.length === 0) {
     issues.push({ level: "error", at: "agent.instructions", message: "The root agent needs instructions.md." });
   } else if (hasInstructionsFile && value.agent.instructions.trim().length === 0) {
     issues.push({ level: "warning", at: "agent.instructions", message: "instructions.md is empty." });

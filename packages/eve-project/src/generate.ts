@@ -1,5 +1,6 @@
 import { patchAgentSource, readAgentSource, readStringValue } from "./agent-source";
 import { DEFAULT_AGENT_MODEL_ID, renderAgentConfig, renderSubagentConfig } from "./agent-template";
+import { workspaceMembers } from "./layout";
 import type { Connection, EveProject, ModelConfig, ProjectFile, Reasoning, Skill, Subagent, Tool } from "./types";
 
 /**
@@ -31,7 +32,9 @@ export function generateProject(project: EveProject): ProjectFile[] {
   const hadInstructions = project.files.some((file) => file.path === instructionsPath);
   // Eve refuses instructions.md beside instructions.ts at the agent root, so code-authored instructions never get a markdown twin.
   const codeAuthored = !hadInstructions && project.files.some((file) => file.path === `${base}instructions.ts`) && instructionsPath === `${base}instructions.md`;
-  if (!codeAuthored && (hadInstructions || agent.instructions.length > 0 || agent.instructionSources.length === 0)) {
+  // A workspace keeps its agents under agents/<name>/, and a root agent/ would hide every one of them from Eve.
+  const isWorkspace = workspaceMembers(project.files.map((file) => file.path)).length > 0;
+  if (!codeAuthored && !isWorkspace && (hadInstructions || agent.instructions.length > 0 || agent.instructionSources.length === 0)) {
     output.set(instructionsPath, agent.instructions);
   }
 

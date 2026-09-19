@@ -8,6 +8,7 @@ import type { AgentRoot } from "./types";
  */
 
 const ROOT_MARKERS = ["agent.ts", "instructions.md", "instructions.ts"];
+const SLOT_DIRECTORIES = ["instructions", "tools", "skills", "subagents", "connections", "channels", "schedules"];
 
 export function detectAgentRoot(paths: readonly string[]): AgentRoot {
   const all = new Set(paths);
@@ -74,4 +75,26 @@ export function looksLikeEveProject(paths: readonly string[]): boolean {
     ROOT_MARKERS.some((marker) => all.has(`agent/${marker}`) || all.has(marker)) ||
     paths.some((path) => path.startsWith("agent/instructions/"))
   );
+}
+
+/**
+ * Members of an eve agent workspace: the `agents/<name>/` directories that hold
+ * agent files and no `package.json` of their own. A root `agent/` directory
+ * takes precedence, which is why a project that has one is never a workspace.
+ */
+export function workspaceMembers(paths: readonly string[]): string[] {
+  if (paths.some((path) => path.startsWith("agent/"))) return [];
+  const members = new Set<string>();
+  const packaged = new Set<string>();
+  for (const path of paths) {
+    const match = /^agents\/([^/]+)\/(.+)$/.exec(path);
+    if (!match) continue;
+    const name = match[1]!;
+    const rest = match[2]!;
+    if (rest === "package.json") packaged.add(name);
+    else if (ROOT_MARKERS.includes(rest) || SLOT_DIRECTORIES.some((slot) => rest.startsWith(`${slot}/`)) || rest.startsWith("agent/")) {
+      members.add(name);
+    }
+  }
+  return [...members].filter((name) => !packaged.has(name)).sort();
 }
