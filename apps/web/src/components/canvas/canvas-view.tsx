@@ -105,7 +105,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { attachResourceAction, changeOwnershipAction, detachResourceAction, removeNodeAction, saveLayoutAction } from "@/lib/actions";
+import { attachResourceAction, changeOwnershipAction, detachResourceAction, removeNodeAction, removeNodesAction, saveLayoutAction } from "@/lib/actions";
 import "@/app/canvas.css";
 
 const nodeTypes = { capability: CanvasNodeCard, note: NoteCard, section: SectionCard };
@@ -135,6 +135,9 @@ export interface CanvasProps {
 type Result = { ok: true } | { ok: false; message: string };
 
 type Point = { x: number; y: number };
+
+/** What a Delete press will take once confirmed: cards, the wires it also detaches, and whether selected notes go with them. */
+type Deletion = { nodes: CanvasNode[]; wires: { resource: string; agent: string }[]; annotations: boolean };
 
 type HistoryEntry =
   | { type: "move"; before: Positions; after: Positions }
@@ -195,7 +198,7 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl Shift Z", "Redo"],
   ["Ctrl C / V", "Attach copies to an agent"],
   ["Ctrl D", "Duplicate notes"],
-  ["Delete", "Detach or delete"],
+  ["Delete", "Delete or detach everything selected"],
 ];
 
 function isCapability(node: Node): node is CapabilityNode {
@@ -280,6 +283,32 @@ function foldedNodes(graph: CanvasGraph, collapsed: Set<string>) {
   };
   for (const id of collapsed) if (!hidden.has(id)) hideUnder(id, id);
   return { hidden, counts };
+}
+
+/** What the delete confirmation says: the one file it removes, or what a larger selection holds. */
+function deletionCopy(nodes: CanvasNode[]): { title: string; description: string; confirmLabel: string } {
+  const [only] = nodes;
+  if (nodes.length <= 1) {
+    return {
+      title: `Delete ${only?.name ?? ""}?`,
+      confirmLabel: "Delete",
+      description:
+        only?.kind === "subagent"
+          ? "This removes the subagent's folder with everything defined inside it. Commit first if you might want it back."
+          : only?.shared
+            ? `This removes ${only.filePath} and the re-export from all ${only.usedBy?.length ?? 0} agents using it.`
+            : `This removes ${only?.filePath ?? "the file"} from the project. Commit first if you might want it back.`,
+    };
+  }
+  const names = nodes.slice(0, 4).map((node) => node.name);
+  const rest = nodes.length - names.length;
+  const listed = rest > 0 ? `${names.join(", ")} and ${rest} more` : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  const folders = nodes.some((node) => node.kind === "subagent") ? " Subagents go with everything inside their folders." : "";
+  return {
+    title: `Delete ${nodes.length} items?`,
+    confirmLabel: `Delete ${nodes.length}`,
+    description: `This removes ${listed} from the project.${folders} Commit first if you might want them back.`,
+  };
 }
 
 function typingInto(target: EventTarget | null): boolean {
@@ -384,7 +413,7 @@ function ZoomControls() {
 function CanvasInner(props: CanvasProps) {
   const { projectId, graph, contents, positions, issues, root } = props;
   const router = useRouter();
-  const { fitView, getNodes, getNode, getIntersectingNodes, setCenter, getZoom, screenToFlowPosition } = useReactFlow<
+  const { fitView, getNodes, getNode, getEdges, getIntersectingNodes, setCenter, getZoom, screenToFlowPosition } = useReactFlow<
     FlowNode,
     RelationEdge
   >();
@@ -474,7 +503,7 @@ function CanvasInner(props: CanvasProps) {
   const [settling, setSettling] = useState(false);
   const [draft, setDraft] = useState<{ kind: DraftKind; owner?: string }>();
   const [picker, setPicker] = useState<{ kind: CreateKind; target: string; at: Point; origin: string; instant: boolean }>();
-  const [confirmDelete, setConfirmDelete] = useState<CanvasNode>();
+  const [confirmDelete, setConfirmDelete] = useState<Deletion>();
   const [notice, setNotice] = useState<{ text: string; tone?: "error"; undo?: boolean }>();
   const [pendingCount, setPendingCount] = useState(0);
   const [sourceState, setSourceState] = useState<SourceState>("saved");
@@ -1041,14 +1070,45 @@ function CanvasInner(props: CanvasProps) {
 
   /* ---------- Deletion ---------- */
 
-  const removeNode = useCallback(async () => {
-    const node = confirmDelete;
+  /**
+   * Everything selected goes in one press: notes, wires, and cards. Notes and wires come back with undo,
+   * so alone they go at once; cards delete files, so a selection holding any asks first.
+   */
+  const deleteSelection = useCallback(() => {
+    const cards = getNodes()
+      .filter((node): node is CapabilityNode => node.selected === true && isCapability(node) && !node.hidden && node.id !== "agent")
+      .flatMap((node) => byId.get(node.id) ?? []);
+    const going = new Set(cards.map((node) => node.id));
+    const subagents = cards.filter((node) => node.kind === "subagent").map((node) => node.id.slice("subagent:".length));
+    // A wire into or out of something being deleted goes with it, as does anything inside a subagent being deleted.
+    const gone = (ref: string) => going.has(ref) || subagents.some((key) => ref.includes(`:${key}/`));
+    const wires = getEdges()
+      .filter((edge) => edge.selected && edge.data?.detachable && !gone(edge.source) && !gone(edge.target))
+      .map((edge) => ({ resource: edge.target, agent: edge.source }));
+    const annotations = annotationsRef.current.some((node) => node.selected);
+    if (cards.length > 0) {
+      setConfirmDelete({ nodes: cards, wires, annotations });
+      return;
+    }
+    removeSelectedAnnotations();
+    for (const wire of wires) void detach(wire.resource, wire.agent);
+  }, [byId, detach, getEdges, getNodes, removeSelectedAnnotations]);
+
+  const confirmDeletion = useCallback(async () => {
+    const deletion = confirmDelete;
     setConfirmDelete(undefined);
-    if (!node) return;
+    if (!deletion) return;
+    if (deletion.annotations) removeSelectedAnnotations();
+    for (const wire of deletion.wires) void detach(wire.resource, wire.agent);
     clearSelection();
-    const ok = await run(() => removeNodeAction({ projectId, ref: node.id }));
-    if (ok) say({ text: `Deleted ${node.name}` });
-  }, [clearSelection, confirmDelete, projectId, run, say]);
+    const [first] = deletion.nodes;
+    const ok = await run(() =>
+      deletion.nodes.length === 1
+        ? removeNodeAction({ projectId, ref: first!.id })
+        : removeNodesAction({ projectId, refs: deletion.nodes.map((node) => node.id) }),
+    );
+    if (ok) say({ text: deletion.nodes.length === 1 ? `Deleted ${first!.name}` : `Deleted ${deletion.nodes.length} items` });
+  }, [clearSelection, confirmDelete, detach, projectId, removeSelectedAnnotations, run, say]);
 
   const selectedNodes = nodes.filter((node) => node.selected);
   const selectedEdges = edges.filter((edge) => edge.selected);
@@ -1114,17 +1174,10 @@ function CanvasInner(props: CanvasProps) {
 
       switch (event.key) {
         case "Delete":
-        case "Backspace": {
+        case "Backspace":
           event.preventDefault();
-          const removedAnnotations = removeSelectedAnnotations();
-          const detachable = selectedEdges.filter((edge) => edge.data?.detachable);
-          if (detachable.length > 0) {
-            for (const edge of detachable) void detach(edge.target, edge.source);
-          } else if (!removedAnnotations && selected && selected.kind !== "agent") {
-            setConfirmDelete(selected);
-          }
+          deleteSelection();
           break;
-        }
         case "f":
         case "F":
           focusSelection();
@@ -1180,17 +1233,14 @@ function CanvasInner(props: CanvasProps) {
     addTarget,
     attach,
     clearSelection,
-    detach,
+    deleteSelection,
     duplicateAnnotations,
     fitView,
     focusSelection,
     getNodes,
     openPicker,
     redo,
-    removeSelectedAnnotations,
     say,
-    selected,
-    selectedEdges,
     setNodes,
     undo,
   ]);
@@ -1435,7 +1485,7 @@ function CanvasInner(props: CanvasProps) {
         onAttach={(resource, agent) => void attach(resource, agent)}
         onDetach={(resource, agent) => void detach(resource, agent)}
         onCreate={create}
-        onDelete={setConfirmDelete}
+        onDelete={(node) => setConfirmDelete({ nodes: [node], wires: [], annotations: false })}
         onSourceState={setSourceState}
       />
     )}
@@ -1776,16 +1826,8 @@ function CanvasInner(props: CanvasProps) {
             onOpenChange={(open) => {
               if (!open) setConfirmDelete(undefined);
             }}
-            title={`Delete ${confirmDelete?.name ?? ""}?`}
-            description={
-              confirmDelete?.kind === "subagent"
-                ? "This removes the subagent's folder with everything defined inside it. Commit first if you might want it back."
-                : confirmDelete?.shared
-                  ? `This removes ${confirmDelete.filePath} and the re-export from all ${confirmDelete.usedBy?.length ?? 0} agents using it.`
-                  : `This removes ${confirmDelete?.filePath ?? "the file"} from the project. Commit first if you might want it back.`
-            }
-            confirmLabel="Delete"
-            onConfirm={() => void removeNode()}
+            {...deletionCopy(confirmDelete?.nodes ?? [])}
+            onConfirm={() => void confirmDeletion()}
           />
         </div>
       </AnnotationContext.Provider>
