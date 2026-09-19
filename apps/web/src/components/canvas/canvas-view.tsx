@@ -102,6 +102,9 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -183,6 +186,110 @@ const WIRE_OPTIONS: { value: WireStyle; label: string; icon: IconData }[] = [
   { value: "straight", label: "Straight", icon: IconWireStraight },
 ];
 
+const ARROWS: Record<string, [number, number]> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+};
+
+type Arrangement = "left" | "center" | "right" | "top" | "middle" | "bottom" | "row" | "column";
+
+const ALIGNMENTS: { how: Arrangement; label: string }[] = [
+  { how: "left", label: "Align left" },
+  { how: "center", label: "Align centers" },
+  { how: "right", label: "Align right" },
+  { how: "top", label: "Align top" },
+  { how: "middle", label: "Align middles" },
+  { how: "bottom", label: "Align bottom" },
+];
+
+const DISTRIBUTIONS: { how: Arrangement; label: string }[] = [
+  { how: "row", label: "Space evenly across" },
+  { how: "column", label: "Space evenly down" },
+];
+
+/**
+ * Where each chosen card goes to line up or spread out. Alignment takes two cards,
+ * even spacing three, since two are always evenly spaced.
+ */
+function arranged(chosen: Node[], how: Arrangement): Positions | undefined {
+  const spread = how === "row" || how === "column";
+  if (chosen.length < (spread ? 3 : 2)) return undefined;
+  const boxes = chosen.map((node) => ({
+    id: node.id,
+    x: node.position.x,
+    y: node.position.y,
+    w: node.measured?.width ?? node.width ?? 0,
+    h: node.measured?.height ?? node.height ?? 0,
+  }));
+  const left = Math.min(...boxes.map((box) => box.x));
+  const top = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.w));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.h));
+  if (spread) {
+    const across = how === "row";
+    const sorted = [...boxes].sort((a, b) => (across ? a.x - b.x : a.y - b.y));
+    const room = (across ? right - left : bottom - top) - sorted.reduce((sum, box) => sum + (across ? box.w : box.h), 0);
+    const gap = room / (sorted.length - 1);
+    let at = across ? left : top;
+    const placed: Positions = {};
+    for (const box of sorted) {
+      placed[box.id] = across ? { x: at, y: box.y } : { x: box.x, y: at };
+      at += (across ? box.w : box.h) + gap;
+    }
+    return placed;
+  }
+  const place = (box: (typeof boxes)[number]): Point => {
+    switch (how) {
+      case "left":
+        return { x: left, y: box.y };
+      case "center":
+        return { x: (left + right) / 2 - box.w / 2, y: box.y };
+      case "right":
+        return { x: right - box.w, y: box.y };
+      case "top":
+        return { x: box.x, y: top };
+      case "middle":
+        return { x: box.x, y: (top + bottom) / 2 - box.h / 2 };
+      default:
+        return { x: box.x, y: bottom - box.h };
+    }
+  };
+  return Object.fromEntries(boxes.map((box) => [box.id, place(box)]));
+}
+
+/** Align and space-evenly entries, shared by the view menu, the selection bar and the right-click menu. */
+function ArrangeItems({ count, onArrange }: { count: number; onArrange: (how: Arrangement) => void }) {
+  return (
+    <>
+      {ALIGNMENTS.map((item) => (
+        <DropdownMenuItem key={item.how} disabled={count < 2} onSelect={() => onArrange(item.how)}>
+          {item.label}
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuSeparator />
+      {DISTRIBUTIONS.map((item) => (
+        <DropdownMenuItem key={item.how} disabled={count < 3} onSelect={() => onArrange(item.how)}>
+          {item.label}
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
+}
+
+/** The same entries tucked under one "Arrange" row, for menus that hold more than this. */
+function ArrangeMenu({ count, onArrange }: { count: number; onArrange: (how: Arrangement) => void }) {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger disabled={count < 2}>Arrange</DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-52">
+        <ArrangeItems count={count} onArrange={onArrange} />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
 const SHORTCUTS: [string, string][] = [
   ["1 to 5", "Add a subagent, tool, skill, connection or channel"],
   ["6 or N", "New note"],
@@ -198,6 +305,7 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl Shift Z", "Redo"],
   ["Ctrl C / V", "Attach copies to an agent"],
   ["Ctrl D", "Duplicate notes"],
+  ["Arrows", "Nudge the selection, Shift for more"],
   ["Delete", "Delete or detach everything selected"],
 ];
 
@@ -851,16 +959,54 @@ function CanvasInner(props: CanvasProps) {
     [applyPositions, fitView, getNodes, graph, measuredSizes, persist, record],
   );
 
-  const align = useCallback(
-    (axis: "x" | "y") => {
-      const selected = getNodes().filter((node) => node.selected);
-      if (selected.length < 2) return;
-      const value = Math.min(...selected.map((node) => node.position[axis]));
-      const after = Object.fromEntries(selected.map((node) => [node.id, { ...node.position, [axis]: value }]));
-      record({ type: "move", before: snapshot(selected), after });
+  /** A card moved by hand leaves the arranged layout, as dragging one does. */
+  const leaveLayout = useCallback((moved: Node[]) => {
+    if (moved.some(isCapability) && layoutState.current.mode !== "freeform") {
+      layoutState.current.mode = "freeform";
+      setMode("freeform");
+    }
+  }, []);
+
+  const arrange = useCallback(
+    (how: Arrangement) => {
+      const chosen = getNodes().filter((node) => node.selected && !node.hidden);
+      const after = arranged(chosen, how);
+      if (!after) return;
+      record({ type: "move", before: snapshot(chosen), after });
+      leaveLayout(chosen);
       applyPositions(after);
     },
-    [applyPositions, getNodes, record],
+    [applyPositions, getNodes, leaveLayout, record],
+  );
+
+  /** Arrow keys move the selection; a run of presses is one step to undo. */
+  const lastNudge = useRef<{ entry: HistoryEntry; at: number }>(undefined);
+  const nudge = useCallback(
+    (dx: number, dy: number) => {
+      const chosen = getNodes().filter((node) => node.selected && !node.hidden);
+      if (chosen.length === 0) return false;
+      const after: Positions = Object.fromEntries(
+        chosen.map((node) => [node.id, { x: node.position.x + dx, y: node.position.y + dy }]),
+      );
+      const last = lastNudge.current;
+      const past = history.current.past;
+      if (last && past.at(-1) === last.entry && performance.now() - last.at < 1000 && last.entry.type === "move") {
+        Object.assign(last.entry.after, after);
+        last.at = performance.now();
+      } else {
+        const entry: HistoryEntry = { type: "move", before: snapshot(chosen), after };
+        record(entry);
+        lastNudge.current = { entry, at: performance.now() };
+      }
+      leaveLayout(chosen);
+      setNodes((current) => current.map((node) => (after[node.id] ? { ...node, position: after[node.id]! } : node)));
+      setAnnotations((current) =>
+        current.map((node) => (after[node.id] ? ({ ...node, position: after[node.id]! } as AnnotationNode) : node)),
+      );
+      persist();
+      return true;
+    },
+    [getNodes, leaveLayout, persist, record, setNodes],
   );
 
   const toggleCollapse = useCallback(
@@ -1172,6 +1318,13 @@ function CanvasInner(props: CanvasProps) {
       }
       if (mod || event.altKey) return;
 
+      const arrow = ARROWS[event.key];
+      if (arrow) {
+        const step = snap ? 24 : event.shiftKey ? 20 : 4;
+        if (nudge(arrow[0] * step, arrow[1] * step)) event.preventDefault();
+        return;
+      }
+
       switch (event.key) {
         case "Delete":
         case "Backspace":
@@ -1238,10 +1391,12 @@ function CanvasInner(props: CanvasProps) {
     fitView,
     focusSelection,
     getNodes,
+    nudge,
     openPicker,
     redo,
     say,
     setNodes,
+    snap,
     undo,
   ]);
 
@@ -1363,13 +1518,10 @@ function CanvasInner(props: CanvasProps) {
       }
       if (Object.keys(after).length === 0) return;
       record({ type: "move", before, after });
-      if (dragged.some(isCapability) && layoutState.current.mode !== "freeform") {
-        layoutState.current.mode = "freeform";
-        setMode("freeform");
-      }
+      leaveLayout(dragged);
       persist();
     },
-    [applyPositions, attach, attachTarget, persist, record],
+    [applyPositions, attach, attachTarget, leaveLayout, persist, record],
   );
 
   const context = useMemo<CanvasContextValue>(
@@ -1687,12 +1839,7 @@ function CanvasInner(props: CanvasProps) {
                   ))}
                 </DropdownMenuRadioGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem disabled={selectedNodes.length + selectedAnnotations.length < 2} onSelect={() => align("x")}>
-                  Align left edges
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={selectedNodes.length + selectedAnnotations.length < 2} onSelect={() => align("y")}>
-                  Align top edges
-                </DropdownMenuItem>
+                <ArrangeMenu count={selectedNodes.length + selectedAnnotations.length} onArrange={arrange} />
                 <DropdownMenuItem
                   disabled={collapsed.size === 0}
                   onSelect={() => {
