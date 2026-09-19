@@ -146,7 +146,7 @@ Your project files are never mixed with evelab's own state. Canvas positions, re
 
 ## Quick start
 
-You need **Node.js 20+** and **pnpm**.
+You need **Node.js 22.13+** and **pnpm**.
 
 ```bash
 git clone https://github.com/anishfn/evelab.git
