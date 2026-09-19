@@ -1927,6 +1927,14 @@
     }
   }
 
+  /* A point for the right-click menu to open from. */
+  .canvas-menu-anchor {
+    position: absolute;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+
   .selection-count {
     padding: 0 8px 0 4px;
     color: var(--foreground-secondary);

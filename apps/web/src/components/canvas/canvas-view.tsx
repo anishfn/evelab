@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import {
   applyNodeChanges,
@@ -105,6 +105,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -141,6 +142,10 @@ export interface CanvasProps {
 type Result = { ok: true } | { ok: false; message: string };
 
 type Point = { x: number; y: number };
+
+/** A right-click: where the menu opens, and on what. */
+type ContextTarget = { type: "pane"; at: Point } | { type: "node"; id: string } | { type: "edge"; id: string };
+type ContextMenuState = { x: number; y: number; target: ContextTarget };
 
 /** What a Delete press will take once confirmed: cards, the wires it also detaches, and whether selected notes go with them. */
 type Deletion = { nodes: CanvasNode[]; wires: { resource: string; agent: string }[]; annotations: boolean };
@@ -309,6 +314,7 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl C / V", "Attach copies to an agent"],
   ["Ctrl D", "Duplicate notes"],
   ["Arrows", "Nudge the selection, Shift for more"],
+  ["Right click", "Actions for what is under the pointer"],
   ["Delete", "Delete or detach everything selected"],
 ];
 
@@ -615,6 +621,7 @@ function CanvasInner(props: CanvasProps) {
   const [draft, setDraft] = useState<{ kind: DraftKind; owner?: string }>();
   const [picker, setPicker] = useState<{ kind: CreateKind; target: string; at: Point; origin: string; instant: boolean }>();
   const [confirmDelete, setConfirmDelete] = useState<Deletion>();
+  const [menu, setMenu] = useState<ContextMenuState>();
   const [notice, setNotice] = useState<{ text: string; tone?: "error"; undo?: boolean }>();
   const [pendingCount, setPendingCount] = useState(0);
   const [sourceState, setSourceState] = useState<SourceState>("saved");
@@ -1270,6 +1277,21 @@ function CanvasInner(props: CanvasProps) {
   const selected = selectedNodes.length === 1 ? byId.get(selectedNodes[0]!.id) : undefined;
   const addTarget = selected && isAgentKind(selected.kind) ? selected : byId.get("agent");
 
+  const copySelection = useCallback(() => {
+    const resources = getNodes().filter((node): node is CapabilityNode => node.selected === true && isCapability(node) && isResourceKind(node.data.kind));
+    const notes = annotationsRef.current.filter((node) => node.selected).map(fromAnnotationNode);
+    if (resources.length === 0 && notes.length === 0) return;
+    clipboard.current = { resources: resources.map((node) => node.id), annotations: notes };
+    if (resources.length > 0) {
+      say({ text: `Copied ${resources.length === 1 ? resources[0]!.data.name : `${resources.length} resources`}. Select an agent and paste to attach.` });
+    }
+  }, [getNodes, say]);
+
+  const paste = useCallback(() => {
+    duplicateAnnotations(clipboard.current.annotations);
+    if (addTarget) for (const resource of clipboard.current.resources) void attach(resource, addTarget.id);
+  }, [addTarget, attach, duplicateAnnotations]);
+
   const focusSelection = useCallback(() => {
     const targets = getNodes().filter((node) => node.selected);
     void fitView({
@@ -1279,6 +1301,54 @@ function CanvasInner(props: CanvasProps) {
       maxZoom: 1.2,
     });
   }, [fitView, getNodes]);
+
+  /* ---------- Right-click menu ---------- */
+
+  const openMenu = useCallback((event: { clientX: number; clientY: number; preventDefault: () => void }, target: ContextTarget) => {
+    event.preventDefault();
+    const rect = layoutRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    unhover();
+    setPicker(undefined);
+    setMenu({ x: event.clientX - rect.left, y: event.clientY - rect.top, target });
+  }, [unhover]);
+
+  const onNodeContextMenu = useCallback<NodeMouseHandler<FlowNode>>(
+    (event, node) => {
+      // Right-clicking outside the selection acts on that card alone, as in a file manager.
+      if (!node.selected) {
+        clearSelection();
+        setNodes((current) => current.map((entry) => (entry.id === node.id ? { ...entry, selected: true } : entry)));
+        setAnnotations((current) =>
+          current.map((entry) => (entry.id === node.id ? ({ ...entry, selected: true } as AnnotationNode) : entry)),
+        );
+      }
+      openMenu(event, { type: "node", id: node.id });
+    },
+    [clearSelection, openMenu, setNodes],
+  );
+
+  const onEdgeContextMenu = useCallback<EdgeMouseHandler<RelationEdge>>(
+    (event, edge) => {
+      clearSelection();
+      setEdges((current) => current.map((entry) => (entry.id === edge.id ? { ...entry, selected: true } : entry)));
+      openMenu(event, { type: "edge", id: edge.id });
+    },
+    [clearSelection, openMenu, setEdges],
+  );
+
+  const onSelectionContextMenu = useCallback(
+    (event: ReactMouseEvent, chosen: Node[]) => {
+      if (chosen[0]) openMenu(event, { type: "node", id: chosen[0].id });
+    },
+    [openMenu],
+  );
+
+  const onPaneContextMenu = useCallback(
+    (event: MouseEvent | ReactMouseEvent) =>
+      openMenu(event, { type: "pane", at: screenToFlowPosition({ x: event.clientX, y: event.clientY }) }),
+    [openMenu, screenToFlowPosition],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1304,19 +1374,12 @@ function CanvasInner(props: CanvasProps) {
         return;
       }
       if (mod && key === "c") {
-        const resources = getNodes().filter((node): node is CapabilityNode => node.selected === true && isCapability(node) && isResourceKind(node.data.kind));
-        const notes = annotationsRef.current.filter((node) => node.selected).map(fromAnnotationNode);
-        if (resources.length === 0 && notes.length === 0) return;
-        clipboard.current = { resources: resources.map((node) => node.id), annotations: notes };
-        if (resources.length > 0) {
-          say({ text: `Copied ${resources.length === 1 ? resources[0]!.data.name : `${resources.length} resources`}. Select an agent and paste to attach.` });
-        }
+        copySelection();
         return;
       }
       if (mod && key === "v") {
         event.preventDefault();
-        duplicateAnnotations(clipboard.current.annotations);
-        if (addTarget) for (const resource of clipboard.current.resources) void attach(resource, addTarget.id);
+        paste();
         return;
       }
       if (mod && key === "d") {
@@ -1391,9 +1454,8 @@ function CanvasInner(props: CanvasProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     addAnnotation,
-    addTarget,
-    attach,
     clearSelection,
+    copySelection,
     deleteSelection,
     duplicateAnnotations,
     fitView,
@@ -1401,6 +1463,7 @@ function CanvasInner(props: CanvasProps) {
     getNodes,
     nudge,
     openPicker,
+    paste,
     redo,
     say,
     setNodes,
@@ -1572,6 +1635,145 @@ function CanvasInner(props: CanvasProps) {
     setSummaryOpen(false);
   };
 
+  /** What a right-click offers: on the board, on one card or note, on a selection, or on a wire. */
+  const contextItems = (target: ContextTarget) => {
+    if (target.type === "pane") {
+      const canPaste = clipboard.current.annotations.length > 0 || (clipboard.current.resources.length > 0 && Boolean(addTarget));
+      return (
+        <>
+          <DropdownMenuItem onSelect={() => addAnnotation("note", target.at)}>
+            Add a note here
+            <DropdownMenuShortcut>N</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => addAnnotation("section", target.at)}>
+            Add a section here
+            <DropdownMenuShortcut>S</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={!canPaste} onSelect={paste}>
+            Paste
+            <DropdownMenuShortcut>Ctrl V</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => {
+              setNodes((current) => current.map((node) => (node.hidden ? node : { ...node, selected: true })));
+              setAnnotations((current) => current.map((node) => ({ ...node, selected: true }) as AnnotationNode));
+            }}
+          >
+            Select all
+            <DropdownMenuShortcut>Ctrl A</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void fitView({ duration: 320, padding: fitPadding(), maxZoom: 1 })}>
+            Fit everything
+            <DropdownMenuShortcut>0</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => applyLayout(mode === "freeform" ? "hierarchical" : mode)}>Tidy up the layout</DropdownMenuItem>
+        </>
+      );
+    }
+
+    if (target.type === "edge") {
+      const edge = edges.find((entry) => entry.id === target.id);
+      if (!edge) return null;
+      const resource = byId.get(edge.target)?.name ?? refName(edge.target);
+      const agent = byId.get(edge.source)?.name ?? edge.source;
+      return (
+        <>
+          <DropdownMenuLabel className="truncate">
+            {agent} to {resource}
+          </DropdownMenuLabel>
+          <DropdownMenuItem
+            onSelect={() => void fitView({ nodes: [{ id: edge.source }, { id: edge.target }], duration: 320, padding: 0.35, maxZoom: 1.2 })}
+          >
+            Focus both ends
+          </DropdownMenuItem>
+          {edge.data?.detachable && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={() => void detach(edge.target, edge.source)}>
+                Detach {resource}
+                <DropdownMenuShortcut>Del</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (selectionCount >= 2) {
+      return (
+        <>
+          <DropdownMenuLabel>{selectionCount} selected</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={focusSelection}>
+            Focus
+            <DropdownMenuShortcut>F</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <ArrangeMenu count={arrangeable} onArrange={arrange} />
+          <DropdownMenuItem onSelect={copySelection}>
+            Copy
+            <DropdownMenuShortcut>Ctrl C</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onSelect={deleteSelection}>
+            Delete {selectionCount} items
+            <DropdownMenuShortcut>Del</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        </>
+      );
+    }
+
+    if (isAnnotationId(target.id)) {
+      const note = annotations.find((node) => node.id === target.id);
+      if (!note) return null;
+      return (
+        <>
+          <DropdownMenuItem onSelect={() => setEditingId(note.id)}>Edit text</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => duplicateAnnotations([fromAnnotationNode(note)])}>
+            Duplicate
+            <DropdownMenuShortcut>Ctrl D</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onSelect={deleteSelection}>
+            Delete
+            <DropdownMenuShortcut>Del</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        </>
+      );
+    }
+
+    const node = byId.get(target.id);
+    if (!node) return null;
+    const folds = isAgentKind(node.kind) && graph.edges.some((edge) => edge.source === node.id);
+    return (
+      <>
+        <DropdownMenuLabel className="truncate">{node.name}</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => select(node.id)}>Open in the inspector</DropdownMenuItem>
+        <DropdownMenuItem onSelect={focusSelection}>
+          Focus
+          <DropdownMenuShortcut>F</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        {folds && (
+          <DropdownMenuItem onSelect={() => toggleCollapse(node.id)}>{collapsed.has(node.id) ? "Expand" : "Collapse"}</DropdownMenuItem>
+        )}
+        {isResourceKind(node.kind) && (
+          <DropdownMenuItem onSelect={copySelection}>
+            Copy to attach elsewhere
+            <DropdownMenuShortcut>Ctrl C</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
+        {node.kind !== "agent" && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={deleteSelection}>
+              Delete
+              <DropdownMenuShortcut>Del</DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </>
+        )}
+      </>
+    );
+  };
+
   const resourceBrowser = (
     <ResourceBrowser
       title={rootNode?.name}
@@ -1695,6 +1897,10 @@ function CanvasInner(props: CanvasProps) {
                 setSummaryOpen(false);
               }}
               onPaneClick={() => setDraft(undefined)}
+              onNodeContextMenu={onNodeContextMenu}
+              onEdgeContextMenu={onEdgeContextMenu}
+              onSelectionContextMenu={onSelectionContextMenu}
+              onPaneContextMenu={onPaneContextMenu}
               onNodeDragStart={onNodeDragStart}
               onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
@@ -1792,6 +1998,18 @@ function CanvasInner(props: CanvasProps) {
               onCreate={() => create(picker.kind, picker.target)}
               onClose={closePicker}
             />
+          )}
+
+          {menu && (
+            // Not modal, so a second right-click elsewhere moves the menu there instead of meeting a blocked board.
+            <DropdownMenu key={`${menu.x},${menu.y}`} open modal={false} onOpenChange={(open) => !open && setMenu(undefined)}>
+              <DropdownMenuTrigger asChild>
+                <span aria-hidden="true" className="canvas-menu-anchor" style={{ left: menu.x, top: menu.y }} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="bottom" sideOffset={2} className="w-56" onCloseAutoFocus={(event) => event.preventDefault()}>
+                {contextItems(menu.target)}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
 
           <div className="canvas-float canvas-view-menu">
